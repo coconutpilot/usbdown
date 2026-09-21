@@ -97,7 +97,7 @@ try {
 
             Write-Log "USB drive detected: $root"
             Write-Host "USB drive detected: $root"
-            $workerOutput = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $WorkerPath -DriveRoot $root -ArchiveRoot $ArchiveRoot 2>&1)
+            $workerOutput = @(& powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File $WorkerPath -DriveRoot $root -ArchiveRoot $ArchiveRoot 2>&1)
             foreach ($line in $workerOutput) {
                 Write-Log ([string]$line)
             }

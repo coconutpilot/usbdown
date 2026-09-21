@@ -160,12 +160,6 @@ function Eject-UsbDrive {
             throw "Unable to access the USB drive for ejection: $source"
         }
         $drive.Self.InvokeVerb('Eject')
-        try {
-            [System.Media.SystemSounds]::Exclamation.Play()
-        }
-        catch {
-            # Sound playback is only a notification and must not affect ejection.
-        }
     }
     finally {
         if ($null -ne $shell) {
