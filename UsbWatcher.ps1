@@ -1,15 +1,15 @@
 [CmdletBinding()]
 param(
-    [string] $ArchiveRoot = (Join-Path $env:USERPROFILE 'Pictures\UsbArchive'),
+    [string] $ArchiveRoot = 'c:\vids\raw',
     [string] $WorkerPath,
     [string] $LogPath
 )
 
 Set-StrictMode -Version 5.1
-$ErrorActionPreference = 'Continue'
+$ErrorActionPreference = 'Stop'
 
 if ([string]::IsNullOrWhiteSpace($WorkerPath)) { $WorkerPath = Join-Path $PSScriptRoot 'Archive-Media.ps1' }
-if ([string]::IsNullOrWhiteSpace($LogPath)) { $LogPath = Join-Path $env:LOCALAPPDATA 'UsbMediaArchive\usb-archive.log' }
+if ([string]::IsNullOrWhiteSpace($LogPath)) { $LogPath = Join-Path $ArchiveRoot, 'usbdown.log' }
 
 function Write-Log {
     param(
