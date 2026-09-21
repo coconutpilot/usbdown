@@ -2,14 +2,18 @@
 param(
     [string] $DriveRoot,
 
-    [string] $ConfigPath,
+    [string] $ArchiveRoot = (Join-Path $env:USERPROFILE 'Pictures\UsbArchive'),
 
     [switch] $DryRun
 )
 
 Set-StrictMode -Version 5.1
 $ErrorActionPreference = 'Stop'
-if ([string]::IsNullOrWhiteSpace($ConfigPath)) { $ConfigPath = Join-Path $PSScriptRoot 'config.json' }
+$MediaExtensions = @(
+    '.jpg', '.jpeg', '.png', '.gif', '.heic', '.tif', '.tiff', '.webp',
+    '.mp4', '.srt', '.mov', '.m4v', '.avi', '.mkv', '.mts', '.m2ts',
+    '.mp3', '.wav', '.m4a', '.flac', '.aac', '.ogg'
+)
 
 function Normalize-DriveRoot {
     param([string] $Path)
@@ -21,27 +25,14 @@ function Normalize-DriveRoot {
     return $resolved
 }
 
-function Get-ArchiveConfig {
-    param([string] $Path)
+function Get-UsbMediaRoot {
+    param([string] $DriveRoot)
 
-    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
-        throw "Configuration file was not found: $Path"
+    $mediaRoot = Join-Path (Normalize-DriveRoot $DriveRoot) 'DCIM'
+    if (-not (Test-Path -LiteralPath $mediaRoot -PathType Container)) {
+        return $null
     }
-
-    $config = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
-    if ([string]::IsNullOrWhiteSpace([string] $config.ArchiveRoot)) {
-        throw 'ArchiveRoot must be configured.'
-    }
-
-    $extensions = @($config.MediaExtensions | ForEach-Object { ([string] $_).ToLowerInvariant() })
-    if ($extensions.Count -eq 0) {
-        throw 'MediaExtensions must contain at least one extension.'
-    }
-
-    return [pscustomobject]@{
-        ArchiveRoot = [Environment]::ExpandEnvironmentVariables([string] $config.ArchiveRoot)
-        MediaExtensions = $extensions
-    }
+    return (Normalize-DriveRoot $mediaRoot)
 }
 
 function Get-UsbDiskForDrive {
@@ -157,11 +148,38 @@ function Test-DestinationIsSafe {
     }
 }
 
+function Eject-UsbDrive {
+    param([string] $DriveRoot)
+
+    $source = Normalize-DriveRoot $DriveRoot
+    $shell = $null
+    $shell = New-Object -ComObject Shell.Application
+    try {
+        $drive = $shell.Namespace($source)
+        if ($null -eq $drive -or $null -eq $drive.Self) {
+            throw "Unable to access the USB drive for ejection: $source"
+        }
+        $drive.Self.InvokeVerb('Eject')
+        try {
+            [System.Media.SystemSounds]::Exclamation.Play()
+        }
+        catch {
+            # Sound playback is only a notification and must not affect ejection.
+        }
+    }
+    finally {
+        if ($null -ne $shell) {
+            [Runtime.InteropServices.Marshal]::ReleaseComObject($shell) | Out-Null
+        }
+    }
+}
+
 function Invoke-Archive {
     param(
         [string] $SourceRoot,
-        [string] $SettingsPath,
-        [switch] $Preview
+        [string] $ArchiveRoot,
+        [switch] $Preview,
+        [ref] $Completed
     )
 
     $source = Normalize-DriveRoot $SourceRoot
@@ -170,13 +188,18 @@ function Invoke-Archive {
     }
 
     Get-UsbDiskForDrive $source | Out-Null
-    $config = Get-ArchiveConfig $SettingsPath
-    $archiveRoot = [IO.Path]::GetFullPath($config.ArchiveRoot)
+    $archiveRoot = [IO.Path]::GetFullPath([Environment]::ExpandEnvironmentVariables($ArchiveRoot))
     Test-DestinationIsSafe $source $archiveRoot
 
-    $files = @(Get-MediaFiles -Root $source -Extensions $config.MediaExtensions)
+    $mediaRoot = Get-UsbMediaRoot $source
+    if ($null -eq $mediaRoot) {
+        Write-Host "No DCIM directory found on $source"
+        return
+    }
+
+    $files = @(Get-MediaFiles -Root $mediaRoot -Extensions $MediaExtensions)
     if ($files.Count -eq 0) {
-        Write-Host "No configured media files found on $source"
+        Write-Host "No configured media files found in $mediaRoot"
         return
     }
 
@@ -184,7 +207,7 @@ function Invoke-Archive {
     $runRoot = Join-Path $dateRoot ('Run-' + (Get-Date -Format 'HHmmssfff') + '-' + ([guid]::NewGuid().ToString('N').Substring(0, 8)))
     $stagingRoot = Join-Path $runRoot 'staging'
     $manifestPath = Join-Path $runRoot 'manifest.json'
-    $records = @(Get-DestinationRecords -Root $source -Files $files)
+    $records = @(Get-DestinationRecords -Root $mediaRoot -Files $files)
 
     if ($Preview) {
         $records | Select-Object RelativeSourcePath, DestinationName, SourceLength | Format-Table -AutoSize
@@ -232,16 +255,19 @@ function Invoke-Archive {
         }
 
         [pscustomobject]@{
-            SourceRoot = $source
+            SourceRoot = $mediaRoot
             ArchiveRun = $runRoot
             CompletedAt = (Get-Date).ToString('o')
             Files = @($records)
         } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
+        if ($null -ne $Completed) {
+            $Completed.Value = $true
+        }
         Write-Host "Archived and deleted $($records.Count) file(s) to $runRoot"
     }
     catch {
         [pscustomobject]@{
-            SourceRoot = $source
+            SourceRoot = $mediaRoot
             ArchiveRun = $runRoot
             FailedAt = (Get-Date).ToString('o')
             Error = $_.Exception.Message
@@ -256,7 +282,15 @@ if ($MyInvocation.InvocationName -ne '.') {
         if ([string]::IsNullOrWhiteSpace($DriveRoot)) {
             throw 'DriveRoot is required.'
         }
-        Invoke-Archive -SourceRoot $DriveRoot -SettingsPath $ConfigPath -Preview:$DryRun
+        $completed = $false
+        try {
+            Invoke-Archive -SourceRoot $DriveRoot -ArchiveRoot $ArchiveRoot -Preview:$DryRun -Completed ([ref]$completed)
+        }
+        finally {
+            if ($completed) {
+                Eject-UsbDrive $DriveRoot
+            }
+        }
         exit 0
     }
     catch {

@@ -7,7 +7,6 @@ Build a Windows PowerShell project that detects USB insertions, archives common 
    - `Archive-Media.ps1`
    - `UsbWatcher.ps1`
    - `setup.ps1`
-   - `config.json`
    - `README.md`
    - `Tests\`
 2. Implement the archive worker:
@@ -28,7 +27,7 @@ Build a Windows PowerShell project that detects USB insertions, archives common 
    - Invoke the archive worker with the detected drive root.
 4. Implement `setup.ps1`:
    - Configure the archive destination.
-   - Create/update `config.json`.
+   - Configure the archive destination directly through the setup script.
    - Register a per-user logon scheduled task.
    - Configure restart-on-failure and working directory.
    - Provide status and uninstall options.
@@ -39,13 +38,12 @@ Build a Windows PowerShell project that detects USB insertions, archives common 
 - `c:\work\usbdown\Archive-Media.ps1`
 - `c:\work\usbdown\UsbWatcher.ps1`
 - `c:\work\usbdown\setup.ps1`
-- `c:\work\usbdown\config.json`
 - `c:\work\usbdown\README.md`
 - `c:\work\usbdown\Tests\`
 
 **Decisions**
 - Windows PowerShell 5.1 and built-in Windows tools only.
-- Configurable archive root.
+- Archive root supplied directly to the scripts.
 - Common media extensions by default.
 - Original file extensions preserved.
 - Six-digit sequential filenames.
