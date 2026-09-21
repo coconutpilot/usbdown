@@ -1,15 +1,14 @@
 [CmdletBinding()]
 param(
     [string] $ArchiveRoot = 'c:\vids\raw',
-    [string] $WorkerPath,
-    [string] $LogPath
+    [string] $WorkerPath
 )
 
 Set-StrictMode -Version 5.1
 $ErrorActionPreference = 'Stop'
 
 if ([string]::IsNullOrWhiteSpace($WorkerPath)) { $WorkerPath = Join-Path $PSScriptRoot 'Archive-Media.ps1' }
-if ([string]::IsNullOrWhiteSpace($LogPath)) { $LogPath = Join-Path $ArchiveRoot, 'usbdown.log' }
+$LogPath = Join-Path $ArchiveRoot 'usbdown.log'
 
 function Write-Log {
     param(
@@ -22,6 +21,8 @@ function Write-Log {
     New-Item -ItemType Directory -Path $directory -Force -ErrorAction SilentlyContinue | Out-Null
     Add-Content -LiteralPath $LogPath -Value ('{0} [{1}] {2}' -f (Get-Date -Format 's'), $Level, $Message) -ErrorAction SilentlyContinue
 }
+
+. $PSScriptRoot\UsbNotification.ps1
 
 function ConvertTo-DriveRoot {
     param([string] $DriveName)
@@ -102,6 +103,10 @@ try {
             }
             if ($LASTEXITCODE -ne 0) {
                 Write-Log "Archive failed for $root with exit code $LASTEXITCODE" 'ERROR'
+            }
+            else {
+                Write-Log "Archive completed successfully for $root"
+                Show-ArchiveNotification $root
             }
         }
         catch {

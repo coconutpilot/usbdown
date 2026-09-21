@@ -3,7 +3,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string] $DriveRoot,
 
-    [ValidateRange(1, 100)]
+    [ValidateRange(1, 100000)]
     [int] $Count = 3
 )
 

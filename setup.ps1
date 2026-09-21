@@ -22,12 +22,9 @@ if ($Status) {
 
 $archiveRoot = [Environment]::ExpandEnvironmentVariables($ArchiveRoot)
 New-Item -ItemType Directory -Path $archiveRoot -Force | Out-Null
-$logRoot = Join-Path $env:LOCALAPPDATA 'UsbMediaArchive'
-New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
 $powerShell = Join-Path $PSHOME 'powershell.exe'
 $watcher = Join-Path $PSScriptRoot 'UsbWatcher.ps1'
-$logPath = Join-Path $logRoot 'usb-archive.log'
-$arguments = '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}" -ArchiveRoot "{1}" -LogPath "{2}"' -f $watcher, $archiveRoot, $logPath
+$arguments = '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}" -ArchiveRoot "{1}"' -f $watcher, $archiveRoot
 $action = New-ScheduledTaskAction -Execute $powerShell -Argument $arguments -WorkingDirectory $PSScriptRoot
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $settings = New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -StartWhenAvailable
@@ -35,4 +32,4 @@ $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" 
 Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description 'Archives media from inserted USB drives.' -Force | Out-Null
 Write-Host "Configured archive root: $archiveRoot"
 Write-Host "Registered per-user logon task: $taskName"
-Write-Host "Watcher log: $logPath"
+Write-Host "Watcher log: $(Join-Path $archiveRoot 'usbdown.log')"
