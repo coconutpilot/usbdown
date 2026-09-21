@@ -10,8 +10,8 @@ function Show-ArchiveNotification {
         [string] $DriveRoot,
         [scriptblock] $NotificationFactory = {
             Add-Type -AssemblyName System.Runtime.WindowsRuntime
-            [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
-            [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime]
+            [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+            [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
 
             $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
             $xml.LoadXml((New-ArchiveNotificationXml $DriveRoot))

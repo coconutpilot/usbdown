@@ -22,12 +22,11 @@ if ($Status) {
 
 $archiveRoot = [Environment]::ExpandEnvironmentVariables($ArchiveRoot)
 New-Item -ItemType Directory -Path $archiveRoot -Force | Out-Null
-$powerShell = Join-Path $PSHOME 'powershell.exe'
-$watcher = Join-Path $PSScriptRoot 'UsbWatcher.ps1'
-$arguments = '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}" -ArchiveRoot "{1}"' -f $watcher, $archiveRoot
-$action = New-ScheduledTaskAction -Execute $powerShell -Argument $arguments -WorkingDirectory $PSScriptRoot
+$launcher = Join-Path $PSScriptRoot 'Start-UsbWatcher.vbs'
+$arguments = '"{0}" "{1}"' -f $PSScriptRoot, $archiveRoot
+$action = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument ('"{0}" {1}' -f $launcher, $arguments) -WorkingDirectory $PSScriptRoot
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-$settings = New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -StartWhenAvailable
+$settings = New-ScheduledTaskSettingsSet -Hidden -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -StartWhenAvailable
 $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
 Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description 'Archives media from inserted USB drives.' -Force | Out-Null
 Write-Host "Configured archive root: $archiveRoot"
