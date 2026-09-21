@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string] $ConfigPath,
+    [string] $ArchiveRoot = (Join-Path $env:USERPROFILE 'Pictures\UsbArchive'),
     [string] $WorkerPath,
     [string] $LogPath
 )
@@ -8,7 +8,6 @@ param(
 Set-StrictMode -Version 5.1
 $ErrorActionPreference = 'Continue'
 
-if ([string]::IsNullOrWhiteSpace($ConfigPath)) { $ConfigPath = Join-Path $PSScriptRoot 'config.json' }
 if ([string]::IsNullOrWhiteSpace($WorkerPath)) { $WorkerPath = Join-Path $PSScriptRoot 'Archive-Media.ps1' }
 if ([string]::IsNullOrWhiteSpace($LogPath)) { $LogPath = Join-Path $env:LOCALAPPDATA 'UsbMediaArchive\usb-archive.log' }
 
@@ -66,7 +65,7 @@ function Wait-ForUsbDrive {
 $query = "SELECT * FROM Win32_VolumeChangeEvent WHERE EventType = 2"
 $sourceIdentifier = 'UsbMediaArchive.VolumeArrival'
 $seen = @{}
-Write-Log "Starting watcher. Config=$ConfigPath Worker=$WorkerPath"
+Write-Log "Starting watcher. ArchiveRoot=$ArchiveRoot Worker=$WorkerPath"
 try {
     Register-WmiEvent -Query $query -SourceIdentifier $sourceIdentifier -ErrorAction Stop | Out-Null
     Write-Log 'WMI volume-arrival subscription registered.'
@@ -97,7 +96,7 @@ try {
 
             Write-Log "USB drive detected: $root"
             Write-Host "USB drive detected: $root"
-            $workerOutput = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $WorkerPath -DriveRoot $root -ConfigPath $ConfigPath 2>&1)
+            $workerOutput = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $WorkerPath -DriveRoot $root -ArchiveRoot $ArchiveRoot 2>&1)
             foreach ($line in $workerOutput) {
                 Write-Log ([string]$line)
             }
