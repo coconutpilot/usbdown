@@ -8,15 +8,15 @@ Run PowerShell as the target Windows user:
 
 ```powershell
 Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
-.\setup.ps1 -ArchiveRoot 'D:\UsbArchive'
+.\setup.ps1 -ArchiveRoot 'c:\vids\raw'
 ```
 
 Setup registers a per-user logon task named `USB Media Archive Watcher`. The archive root and media extension list are defined directly in the scripts.
 
-The watcher writes startup, WMI, USB detection, and archive errors to `%LOCALAPPDATA%\UsbMediaArchive\usb-archive.log`. View it with:
+The watcher writes timestamped `INFO`, `WARN`, and `ERROR` entries for startup, WMI registration, USB detection, archive success or failure, and notification failures to `<ArchiveRoot>\usbdown.log`:
 
 ```powershell
-Get-Content "$env:LOCALAPPDATA\UsbMediaArchive\usb-archive.log" -Tail 100 -Wait
+Get-Content "D:\UsbArchive\usbdown.log" -Tail 100 -Wait
 ```
 
 Useful commands:
@@ -32,7 +32,7 @@ After setup, start the task immediately without waiting for the next logon:
 Start-ScheduledTask -TaskName 'USB Media Archive Watcher'
 ```
 
-The archive root can be supplied to setup or manual runs with `-ArchiveRoot`. Environment variables such as `%USERPROFILE%` are expanded at runtime. The default is `%USERPROFILE%\Pictures\UsbArchive`.
+The archive root can be supplied to setup or manual runs with `-ArchiveRoot`. Environment variables such as `%USERPROFILE%` are expanded at runtime. The default is `c:\vids\raw`.
 
 ## Archive layout
 
@@ -72,6 +72,8 @@ The Pester tests cover deterministic media selection and sequential naming witho
 ```powershell
 Invoke-Pester .\Tests
 ```
+
+The notification tests include a real Windows toast integration test. Run them from the logged-in desktop session to see the persistent archive reminder and its `Acknowledge` action.
 
 For an integration test, use a disposable USB drive containing a `DCIM` directory with known media and non-media files, plus media outside `DCIM`. Confirm that only `DCIM` media is archived, along with the date/run layout, manifest hashes, sequential names, source deletion, and USB ejection. Also test a drive without `DCIM`; it should be skipped and remain connected. Then test a failure case by removing write permission from the archive destination or disconnecting the drive during a run; source files should remain and the device should not be ejected when verification cannot complete.
 
