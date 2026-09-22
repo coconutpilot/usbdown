@@ -142,4 +142,11 @@ Describe 'Archive media helpers' {
     It 'rejects an archive root on the source volume' {
         { Test-DestinationIsSafe -SourceRoot 'E:\' -ArchiveRoot 'E:\Archive' } | Should Throw
     }
+
+    It 'accepts a drive that is already unavailable during ejection' {
+        Mock Normalize-DriveRoot { return 'Z:\' }
+        Mock Test-Path { return $false }
+
+        { Eject-UsbDrive 'Z:\' -TimeoutSeconds 1 } | Should Not Throw
+    }
 }
