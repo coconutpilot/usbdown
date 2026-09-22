@@ -19,6 +19,94 @@ $MediaExtensions = @(
     '.mp3', '.wav', '.m4a', '.flac', '.aac', '.ogg'
 )
 
+function New-ArchiveNotificationXml {
+    param([string] $DriveRoot)
+
+    $safeDriveRoot = [System.Security.SecurityElement]::Escape($DriveRoot)
+    return '<toast scenario="default"><visual><binding template="ToastText02"><text id="1">USB media archive complete</text><text id="2">Media from {0} was archived successfully.</text></binding></visual><actions><action content="Acknowledge" arguments="acknowledge" activationType="system"/></actions></toast>' -f $safeDriveRoot
+}
+
+function New-ArchiveProgressNotificationXml {
+    param([string] $DeviceName)
+
+    $safeDeviceName = [System.Security.SecurityElement]::Escape($DeviceName)
+    return '<toast scenario="reminder" duration="long"><visual><binding template="ToastText02"><text id="1">USB media archive in progress</text><text id="2">Archiving media from {0}.</text></binding></visual><actions><action content="Dismiss" arguments="dismiss" activationType="system"/></actions></toast>' -f $safeDeviceName
+}
+
+function Show-ArchiveProgressNotification {
+    param(
+        [string] $DeviceName,
+        [scriptblock] $NotificationFactory = {
+            Add-Type -AssemblyName System.Runtime.WindowsRuntime
+            [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+            [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
+
+            $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
+            $xml.LoadXml((New-ArchiveProgressNotificationXml $DeviceName))
+            $toast = New-Object Windows.UI.Notifications.ToastNotification $xml
+            $toast.Tag = 'usbdown-archive-progress'
+            $toast.Group = 'usbdown'
+            $notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('Microsoft.WindowsPowerShell_8wekyb3d8bbwe!WindowsPowerShell')
+            return [pscustomobject]@{
+                Notifier = $notifier
+                Toast = $toast
+            }
+        }
+    )
+
+    try {
+        $notification = & $NotificationFactory
+        $notification.Notifier.Show($notification.Toast)
+        return $notification
+    }
+    catch {
+        Write-Host "Unable to display archive progress notification: $($_.Exception.Message)"
+        return $null
+    }
+}
+
+function Remove-ArchiveProgressNotification {
+    param([object] $Notification)
+
+    if ($null -eq $Notification) { return }
+    try {
+        $Notification.Notifier.Hide($Notification.Toast)
+    }
+    catch {
+        Write-Host "Unable to remove archive progress notification: $($_.Exception.Message)"
+    }
+}
+
+function Show-ArchiveNotification {
+    param(
+        [string] $DriveRoot,
+        [scriptblock] $NotificationFactory = {
+            Add-Type -AssemblyName System.Runtime.WindowsRuntime
+            [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+            [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
+
+            $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
+            $xml.LoadXml((New-ArchiveNotificationXml $DriveRoot))
+            $toast = New-Object Windows.UI.Notifications.ToastNotification $xml
+            $notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('Microsoft.WindowsPowerShell_8wekyb3d8bbwe!WindowsPowerShell')
+            return [pscustomobject]@{
+                Notifier = $notifier
+                Toast = $toast
+            }
+        }
+    )
+
+    try {
+        $notification = & $NotificationFactory
+        $notification.Notifier.Show($notification.Toast)
+        return $true
+    }
+    catch {
+        Write-Log "Unable to display archive notification: $($_.Exception.Message)" 'WARN'
+        return $false
+    }
+}
+
 function Normalize-DriveRoot {
     param([string] $Path)
 
@@ -239,13 +327,19 @@ function Get-MtpDestinationRecords {
     return $records.ToArray()
 }
 
-function Copy-MtpItem {
+function Copy-ShellItem {
     param(
         [object] $Item,
         [string] $Destination,
+        [string] $SourcePath,
         [int] $TimeoutSeconds = 300
     )
 
+    if ($null -eq $Item -and [string]::IsNullOrWhiteSpace($SourcePath)) {
+        throw 'An MTP item or source path is required.'
+    }
+
+    $itemName = if ($null -ne $Item) { [string]$Item.Name } else { Split-Path -Leaf $SourcePath }
     $destinationFolderPath = Split-Path -Parent $Destination
     $destinationName = Split-Path -Leaf $Destination
     $existingFiles = @(
@@ -254,6 +348,18 @@ function Copy-MtpItem {
     )
     $shell = New-Object -ComObject Shell.Application
     try {
+        if ($null -eq $Item) {
+            $sourceFolderPath = Split-Path -Parent $SourcePath
+            $sourceName = Split-Path -Leaf $SourcePath
+            $sourceFolder = $shell.Namespace($sourceFolderPath)
+            if ($null -eq $sourceFolder) {
+                throw "Unable to access source directory: $sourceFolderPath"
+            }
+            $Item = $sourceFolder.ParseName($sourceName)
+            if ($null -eq $Item) {
+                throw "Unable to resolve source file: $SourcePath"
+            }
+        }
         $folder = $shell.Namespace($destinationFolderPath)
         if ($null -eq $folder) {
             throw "Unable to access staging directory: $destinationFolderPath"
@@ -262,7 +368,7 @@ function Copy-MtpItem {
             $folder.CopyHere($Item, 20)
         }
         catch {
-            Write-Host "Copy-MTP Shell CopyHere failed: $($_.Exception.Message)"
+            Write-Host "Copy-ShellItem CopyHere failed: $($_.Exception.Message)"
             throw
         }
         $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
@@ -288,8 +394,8 @@ function Copy-MtpItem {
             }
             Start-Sleep -Milliseconds 250
         } while ((Get-Date) -lt $deadline)
-        Write-Host "Copy-MTP timeout: Item=$($Item.Name) Destination=$Destination Polls=$pollCount"
-        throw "Timed out copying MTP item: $($Item.Name)"
+        Write-Host "Copy-ShellItem timeout: Item=$itemName Destination=$Destination Polls=$pollCount"
+        throw "Timed out copying item: $itemName"
     }
     finally {
         if ($null -ne $shell) {
@@ -432,23 +538,50 @@ function Test-DestinationIsSafe {
 }
 
 function Eject-UsbDrive {
-    param([string] $DriveRoot)
+    param(
+        [string] $DriveRoot,
+        [int] $TimeoutSeconds = 30
+    )
 
     $source = Normalize-DriveRoot $DriveRoot
-    $shell = $null
-    $shell = New-Object -ComObject Shell.Application
-    try {
-        $drive = $shell.Namespace($source)
-        if ($null -eq $drive -or $null -eq $drive.Self) {
-            throw "Unable to access the USB drive for ejection: $source"
+    Write-Host "Ejecting USB drive: $source"
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    do {
+        $shell = $null
+        try {
+            $shell = New-Object -ComObject Shell.Application
+            $drive = $shell.Namespace($source)
+            if ($null -eq $drive -or $null -eq $drive.Self) {
+                if (-not (Test-Path -LiteralPath $source -PathType Container)) {
+                    Write-Host "USB drive is already ejected: $source"
+                    return
+                }
+                throw "Unable to access the USB drive for ejection: $source"
+            }
+            Write-Host "Invoking USB eject: $source"
+            $drive.Self.InvokeVerb('Eject')
         }
-        $drive.Self.InvokeVerb('Eject')
-    }
-    finally {
-        if ($null -ne $shell) {
-            [Runtime.InteropServices.Marshal]::ReleaseComObject($shell) | Out-Null
+        catch {
+            if ((Get-Date) -ge $deadline) {
+                Write-Host "USB eject failed: $($_.Exception.Message)"
+                throw
+            }
+            Write-Host "USB eject attempt failed; retrying: $($_.Exception.Message)"
         }
-    }
+        finally {
+            if ($null -ne $shell) {
+                [Runtime.InteropServices.Marshal]::ReleaseComObject($shell) | Out-Null
+            }
+        }
+
+        Start-Sleep -Milliseconds 500
+        if (-not (Test-Path -LiteralPath $source -PathType Container)) {
+            Write-Host "USB drive ejected: $source"
+            return
+        }
+    } while ((Get-Date) -lt $deadline)
+
+    throw "Timed out ejecting USB drive: $source"
 }
 
 function Invoke-MtpArchive {
@@ -479,11 +612,12 @@ function Invoke-MtpArchive {
         return
     }
 
+    $progressNotification = Show-ArchiveProgressNotification -DeviceName $MtpName
     try {
         New-Item -ItemType Directory -Path $stagingRoot -Force | Out-Null
         foreach ($record in $records) {
             $destination = Join-Path $stagingRoot $record.DestinationName
-            $copied = Copy-MtpItem -Item $record.Item -Destination $destination
+            $copied = Copy-ShellItem -Item $record.Item -Destination $destination
             $record.DestinationHash = (Get-FileHash -LiteralPath $copied -Algorithm SHA256).Hash
             $record.Status = 'StagedAndVerified'
         }
@@ -525,6 +659,9 @@ function Invoke-MtpArchive {
             Files = @($records)
         } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $manifestPath -Encoding UTF8 -ErrorAction SilentlyContinue
         throw
+    }
+    finally {
+        Remove-ArchiveProgressNotification $progressNotification
     }
 }
 
@@ -568,13 +705,14 @@ function Invoke-Archive {
         return
     }
 
+    $progressNotification = Show-ArchiveProgressNotification -DeviceName $source
     try {
         New-Item -ItemType Directory -Path $stagingRoot -Force | Out-Null
         foreach ($record in $records) {
             $record.SourceHash = (Get-FileHash -LiteralPath $record.SourcePath -Algorithm SHA256).Hash
             $destination = Join-Path $stagingRoot $record.DestinationName
-            Copy-Item -LiteralPath $record.SourcePath -Destination $destination -Force:$false -ErrorAction Stop
-            $record.DestinationHash = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash
+            $copied = Copy-ShellItem -SourcePath $record.SourcePath -Destination $destination
+            $record.DestinationHash = (Get-FileHash -LiteralPath $copied -Algorithm SHA256).Hash
             if ($record.SourceHash -ne $record.DestinationHash) {
                 throw "Hash mismatch after copying $($record.SourcePath)"
             }
@@ -628,6 +766,9 @@ function Invoke-Archive {
             Files = @($records)
         } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $manifestPath -Encoding UTF8 -ErrorAction SilentlyContinue
         throw
+    }
+    finally {
+        Remove-ArchiveProgressNotification $progressNotification
     }
 }
 

@@ -23,7 +23,7 @@ function Write-Log {
     Add-Content -LiteralPath $LogPath -Value ('{0} [{1}] {2}' -f (Get-Date -Format 's'), $Level, $Message) -ErrorAction SilentlyContinue
 }
 
-. $PSScriptRoot\UsbNotification.ps1
+. $PSScriptRoot\Archive-Media.ps1
 
 function ConvertTo-DriveRoot {
     param([string] $DriveName)
