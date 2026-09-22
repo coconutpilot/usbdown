@@ -18,6 +18,7 @@ function Write-Log {
     )
 
     $directory = Split-Path -Parent $LogPath
+    Write-Host $Message
     New-Item -ItemType Directory -Path $directory -Force -ErrorAction SilentlyContinue | Out-Null
     Add-Content -LiteralPath $LogPath -Value ('{0} [{1}] {2}' -f (Get-Date -Format 's'), $Level, $Message) -ErrorAction SilentlyContinue
 }
@@ -63,6 +64,77 @@ function Wait-ForUsbDrive {
     return $false
 }
 
+function Test-MtpDeviceItem {
+    param(
+        [object] $Folder,
+        [int] $Depth = 0
+    )
+
+    if ($Depth -gt 3) { return $false }
+    foreach ($item in @($Folder.Items())) {
+        if (-not $item.IsFolder) { continue }
+        if ([string]$item.Name -ieq 'DCIM') { return $true }
+        if (Test-MtpDeviceItem $item.GetFolder() ($Depth + 1)) { return $true }
+    }
+    return $false
+}
+
+function Get-MtpDevices {
+    $shell = New-Object -ComObject Shell.Application
+    try {
+        $thisPc = $shell.Namespace(17)
+        if ($null -eq $thisPc) { return @() }
+        $devices = New-Object System.Collections.Generic.List[object]
+        foreach ($item in @($thisPc.Items())) {
+            $path = [string]$item.Path
+            if ([string]::IsNullOrWhiteSpace($path)) {
+                Write-Log "Skipping MTP device with no shell namespace path: $($item.Name)" 'WARN'
+                continue
+            }
+            if (-not $item.IsFolder -or $path -notlike '::{*}') { continue }
+            try {
+                if (Test-MtpDeviceItem $item.GetFolder()) {
+                    $devices.Add([pscustomobject]@{
+                        Name = [string]$item.Name
+                        Path = $path
+                    })
+                }
+            }
+            catch {
+                Write-Log "Unable to inspect shell device $($item.Name): $($_.Exception.Message)" 'WARN'
+            }
+        }
+        return $devices.ToArray()
+    }
+    finally {
+        if ($null -ne $shell) {
+            [Runtime.InteropServices.Marshal]::ReleaseComObject($shell) | Out-Null
+        }
+    }
+}
+
+function Invoke-MtpDevice {
+    param(
+        [object] $Device,
+        [string] $ArchiveRoot,
+        [string] $WorkerPath
+    )
+
+    Write-Log "MTP device detected: $($Device.Name)"
+    $workerMessage = "Running archive worker: powershell.exe -File $WorkerPath -MtpPath $($Device.Path) -MtpName $($Device.Name) -ArchiveRoot $ArchiveRoot"
+    Write-Log $workerMessage
+    & powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File $WorkerPath -MtpPath $Device.Path -MtpName $Device.Name -ArchiveRoot $ArchiveRoot 2>&1 |
+        ForEach-Object { Write-Log ([string]$_) }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Log "MTP archive failed for $($Device.Name) with exit code $LASTEXITCODE" 'ERROR'
+    }
+    else {
+        Write-Log "MTP archive completed successfully for $($Device.Name)"
+        Show-ArchiveNotification $Device.Name
+    }
+}
+
+Write-Host "Log: $LogPath"
 $query = "SELECT * FROM Win32_VolumeChangeEvent WHERE EventType = 2"
 $sourceIdentifier = 'UsbMediaArchive.VolumeArrival'
 $seen = @{}
@@ -75,17 +147,28 @@ catch {
     Write-Log $_.Exception.Message 'ERROR'
     exit 1
 }
-Write-Host "USB media watcher is running. Log: $LogPath"
 
 try {
     while ($true) {
-        $event = Wait-Event -SourceIdentifier $sourceIdentifier -Timeout 5
-        if ($null -eq $event) { continue }
+        foreach ($device in @(Get-MtpDevices)) {
+            $key = ('MTP:' + $device.Path).ToUpperInvariant()
+            if ($seen.ContainsKey($key) -and ((Get-Date) - $seen[$key]).TotalMinutes -lt 5) { continue }
+            $seen[$key] = Get-Date
+            try {
+                Invoke-MtpDevice -Device $device -ArchiveRoot $ArchiveRoot -WorkerPath $WorkerPath
+            }
+            catch {
+                Write-Log "MTP event processing failed: $($_.Exception.Message)" 'ERROR'
+            }
+        }
+
+        $volumeEvent = Wait-Event -SourceIdentifier $sourceIdentifier -Timeout 5
+        if ($null -eq $volumeEvent) { continue }
 
         try {
-            $root = ConvertTo-DriveRoot $event.SourceEventArgs.NewEvent.DriveName
+            $root = ConvertTo-DriveRoot $volumeEvent.SourceEventArgs.NewEvent.DriveName
             if ($null -eq $root) { continue }
-            Write-Log "Volume arrival event received: $($event.SourceEventArgs.NewEvent.DriveName)"
+            Write-Log "Volume arrival event received: $($volumeEvent.SourceEventArgs.NewEvent.DriveName)"
             $key = $root.ToUpperInvariant()
             if ($seen.ContainsKey($key) -and ((Get-Date) - $seen[$key]).TotalMinutes -lt 5) { continue }
             $seen[$key] = Get-Date
@@ -96,11 +179,10 @@ try {
             }
 
             Write-Log "USB drive detected: $root"
-            Write-Host "USB drive detected: $root"
-            $workerOutput = @(& powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File $WorkerPath -DriveRoot $root -ArchiveRoot $ArchiveRoot 2>&1)
-            foreach ($line in $workerOutput) {
-                Write-Log ([string]$line)
-            }
+            $workerMessage = "Running archive worker: powershell.exe -File $WorkerPath -DriveRoot $root -ArchiveRoot $ArchiveRoot"
+            Write-Log $workerMessage
+            & powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File $WorkerPath -DriveRoot $root -ArchiveRoot $ArchiveRoot 2>&1 |
+                ForEach-Object { Write-Log ([string]$_) }
             if ($LASTEXITCODE -ne 0) {
                 Write-Log "Archive failed for $root with exit code $LASTEXITCODE" 'ERROR'
             }
@@ -113,7 +195,7 @@ try {
             Write-Log "USB event processing failed: $($_.Exception.Message)" 'ERROR'
         }
         finally {
-            Remove-Event -EventIdentifier $event.EventIdentifier -ErrorAction SilentlyContinue
+            Remove-Event -EventIdentifier $volumeEvent.EventIdentifier -ErrorAction SilentlyContinue
         }
     }
 }
