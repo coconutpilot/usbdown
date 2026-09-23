@@ -123,7 +123,7 @@ function Invoke-MtpDevice {
     Write-Log "MTP device detected: $($Device.Name)"
     $workerMessage = "Running archive worker: powershell.exe -File $WorkerPath -MtpPath $($Device.Path) -MtpName $($Device.Name) -ArchiveRoot $ArchiveRoot"
     Write-Log $workerMessage
-    & powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File $WorkerPath -MtpPath $Device.Path -MtpName $Device.Name -ArchiveRoot $ArchiveRoot 2>&1 |
+    & powershell.exe -NoProfile -WindowStyle Normal -ExecutionPolicy Bypass -File $WorkerPath -MtpPath $Device.Path -MtpName $Device.Name -ArchiveRoot $ArchiveRoot 2>&1 |
         ForEach-Object { Write-Log ([string]$_) }
     if ($LASTEXITCODE -ne 0) {
         Write-Log "MTP archive failed for $($Device.Name) with exit code $LASTEXITCODE" 'ERROR'
@@ -181,7 +181,7 @@ try {
             Write-Log "USB drive detected: $root"
             $workerMessage = "Running archive worker: powershell.exe -File $WorkerPath -DriveRoot $root -ArchiveRoot $ArchiveRoot"
             Write-Log $workerMessage
-            & powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File $WorkerPath -DriveRoot $root -ArchiveRoot $ArchiveRoot 2>&1 |
+            & powershell.exe -NoProfile -WindowStyle Normal -ExecutionPolicy Bypass -File $WorkerPath -DriveRoot $root -ArchiveRoot $ArchiveRoot 2>&1 |
                 ForEach-Object { Write-Log ([string]$_) }
             if ($LASTEXITCODE -ne 0) {
                 Write-Log "Archive failed for $root with exit code $LASTEXITCODE" 'ERROR'

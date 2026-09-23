@@ -35,12 +35,21 @@ Describe 'Archive notification' {
     }
 
     It 'creates a reminder toast for an archive in progress' {
-        $toastXml = New-ArchiveProgressNotificationXml 'DJI RC 2'
+        $toastXml = New-ArchiveProgressNotificationXml -DeviceName 'DJI RC 2' -Completed 2 -Total 5
 
         $toastXml | Should Match '<toast scenario="reminder" duration="long">'
         $toastXml | Should Match 'duration="long"'
         $toastXml | Should Match 'Archiving media from DJI RC 2.'
+        $toastXml | Should Match '<progress title="Copy progress" value="0.40" valueStringOverride="2 of 5 files copied" status="Copying"/>'
         $toastXml | Should Match 'content="Dismiss"'
+    }
+
+    It 'tries fallback toast app IDs when the primary notifier is unavailable' {
+        $ids = @(Get-ToastNotifierCandidates)
+
+        (@($ids) -contains 'Microsoft.WindowsPowerShell_8wekyb3d8bbwe!WindowsPowerShell') | Should Be $true
+        (@($ids) -contains 'WindowsPowerShell') | Should Be $true
+        (@($ids) -contains 'Windows.SystemToast') | Should Be $true
     }
 
     It 'creates a real Windows toast notification' {

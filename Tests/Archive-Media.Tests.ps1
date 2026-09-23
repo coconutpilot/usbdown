@@ -27,10 +27,12 @@ Describe 'Archive media helpers' {
         Join-MtpRelativePath '100MEDIA' 'clip.mp4' | Should Be '100MEDIA\clip.mp4'
     }
 
-    It 'finds DCIM under each MTP root item' {
+    It 'finds DCIM and Movies under each MTP root item' {
         $internalDcim = [pscustomobject]@{ Name = 'DCIM'; IsFolder = $true }
         Add-Member -InputObject $internalDcim -MemberType ScriptMethod -Name GetFolder -Value { return 'internal-dcim' }
-        $internalStorage = [pscustomobject]@{ Name = 'Internal storage'; IsFolder = $true; Children = @($internalDcim) }
+        $internalMovies = [pscustomobject]@{ Name = 'Movies'; IsFolder = $true }
+        Add-Member -InputObject $internalMovies -MemberType ScriptMethod -Name GetFolder -Value { return 'internal-movies' }
+        $internalStorage = [pscustomobject]@{ Name = 'Internal storage'; IsFolder = $true; Children = @($internalDcim, $internalMovies) }
         Add-Member -InputObject $internalStorage -MemberType ScriptMethod -Name GetFolder -Value { return $this }
         Add-Member -InputObject $internalStorage -MemberType ScriptMethod -Name Items -Value { return $this.Children }
 
@@ -43,13 +45,15 @@ Describe 'Archive media helpers' {
         $deviceRoot = [pscustomobject]@{ Children = @($internalStorage, $sdCard) }
         Add-Member -InputObject $deviceRoot -MemberType ScriptMethod -Name Items -Value { return $this.Children }
 
-        $folders = @(Get-MtpRootDcimFolders $deviceRoot)
+        $folders = @(Get-MtpRootMediaFolders $deviceRoot)
 
-        $folders.Count | Should Be 2
+        $folders.Count | Should Be 3
         $folders[0].RelativePath | Should Be 'Internal storage\DCIM'
         $folders[0].Folder | Should Be 'internal-dcim'
-        $folders[1].RelativePath | Should Be 'SD card\DCIM'
-        $folders[1].Folder | Should Be 'sd-dcim'
+        $folders[1].RelativePath | Should Be 'Internal storage\Movies'
+        $folders[1].Folder | Should Be 'internal-movies'
+        $folders[2].RelativePath | Should Be 'SD card\DCIM'
+        $folders[2].Folder | Should Be 'sd-dcim'
     }
 
     It 'returns discovered files from Add-MtpFiles' {

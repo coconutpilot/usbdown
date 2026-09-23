@@ -6,7 +6,7 @@ param(
 
     [string] $MtpName = 'MTP device',
 
-    [string] $ArchiveRoot = (Join-Path $env:USERPROFILE 'Pictures\UsbArchive'),
+    [string] $ArchiveRoot = 'C:\vids\raw',
 
     [switch] $DryRun
 )
@@ -19,34 +19,101 @@ $MediaExtensions = @(
     '.mp3', '.wav', '.m4a', '.flac', '.aac', '.ogg'
 )
 
+function Get-ToastNotifierCandidates {
+    return @(
+        'Microsoft.WindowsPowerShell_8wekyb3d8bbwe!WindowsPowerShell',
+        'WindowsPowerShell',
+        'Windows.SystemToast',
+        ''
+    )
+}
+
+function New-ToastNotifier {
+    foreach ($candidate in (Get-ToastNotifierCandidates)) {
+        try {
+            if ([string]::IsNullOrWhiteSpace($candidate)) {
+                return [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier()
+            }
+            return [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($candidate)
+        }
+        catch {
+            Write-Host "Toast notifier candidate '$candidate' is unavailable: $($_.Exception.Message)"
+        }
+    }
+
+    return $null
+}
+
+function Show-DesktopNotification {
+    param(
+        [string] $Title,
+        [string] $Message,
+        [int] $TimeoutMs = 5000
+    )
+
+    try {
+        Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop | Out-Null
+        Add-Type -AssemblyName System.Drawing -ErrorAction Stop | Out-Null
+
+        $notifyIcon = New-Object System.Windows.Forms.NotifyIcon
+        $notifyIcon.Icon = [System.Drawing.SystemIcons]::Information
+        $notifyIcon.Visible = $true
+        $notifyIcon.BalloonTipTitle = $Title
+        $notifyIcon.BalloonTipText = $Message
+        $notifyIcon.ShowBalloonTip($TimeoutMs)
+        Start-Sleep -Milliseconds 200
+        $notifyIcon.Dispose()
+        return $true
+    }
+    catch {
+        Write-Host "Desktop notification fallback failed: $($_.Exception.Message)"
+        return $false
+    }
+}
+
 function New-ArchiveNotificationXml {
     param([string] $DriveRoot)
 
     $safeDriveRoot = [System.Security.SecurityElement]::Escape($DriveRoot)
-    return '<toast scenario="default"><visual><binding template="ToastText02"><text id="1">USB media archive complete</text><text id="2">Media from {0} was archived successfully.</text></binding></visual><actions><action content="Acknowledge" arguments="acknowledge" activationType="system"/></actions></toast>' -f $safeDriveRoot
+    return '<toast scenario="default"><visual><binding template="ToastGeneric"><text>USB media archive complete</text><text>Media from {0} was archived successfully.</text></binding></visual><actions><action content="Acknowledge" arguments="acknowledge" activationType="system"/></actions></toast>' -f $safeDriveRoot
 }
 
 function New-ArchiveProgressNotificationXml {
-    param([string] $DeviceName)
+    param(
+        [string] $DeviceName,
+        [int] $Completed = 0,
+        [int] $Total = 0
+    )
 
     $safeDeviceName = [System.Security.SecurityElement]::Escape($DeviceName)
-    return '<toast scenario="reminder" duration="long"><visual><binding template="ToastText02"><text id="1">USB media archive in progress</text><text id="2">Archiving media from {0}.</text></binding></visual><actions><action content="Dismiss" arguments="dismiss" activationType="system"/></actions></toast>' -f $safeDeviceName
+    [double]$value = 0
+    if ($Total -gt 0) {
+        $value = [double]$Completed / [double]$Total
+        if ($value -lt 0) { $value = 0 }
+        if ($value -gt 1) { $value = 1 }
+    }
+    $progressText = "$Completed of $Total files copied"
+    return '<toast scenario="reminder" duration="long"><visual><binding template="ToastGeneric"><text>USB media archive in progress</text><text>Archiving media from {0}.</text><progress title="Copy progress" value="{1}" valueStringOverride="{2}" status="Copying"/></binding></visual><actions><action content="Dismiss" arguments="dismiss" activationType="system"/></actions></toast>' -f $safeDeviceName, $value.ToString('0.00'), $progressText
 }
 
 function Show-ArchiveProgressNotification {
     param(
         [string] $DeviceName,
+        [int] $Total = 0,
         [scriptblock] $NotificationFactory = {
             Add-Type -AssemblyName System.Runtime.WindowsRuntime
             [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
             [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
 
             $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
-            $xml.LoadXml((New-ArchiveProgressNotificationXml $DeviceName))
+            $xml.LoadXml((New-ArchiveProgressNotificationXml -DeviceName $DeviceName -Total $Total))
             $toast = New-Object Windows.UI.Notifications.ToastNotification $xml
             $toast.Tag = 'usbdown-archive-progress'
             $toast.Group = 'usbdown'
-            $notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('Microsoft.WindowsPowerShell_8wekyb3d8bbwe!WindowsPowerShell')
+            $notifier = New-ToastNotifier
+            if ($null -eq $notifier) {
+                throw 'No compatible Windows toast notifier could be created.'
+            }
             return [pscustomobject]@{
                 Notifier = $notifier
                 Toast = $toast
@@ -61,7 +128,34 @@ function Show-ArchiveProgressNotification {
     }
     catch {
         Write-Host "Unable to display archive progress notification: $($_.Exception.Message)"
+        $progressText = "Archiving media from $DeviceName. $Total file(s) queued."
+        Show-DesktopNotification -Title 'USB media archive in progress' -Message $progressText -TimeoutMs 3000 | Out-Null
         return $null
+    }
+}
+
+function Update-ArchiveProgressNotification {
+    param(
+        [object] $Notification,
+        [string] $DeviceName,
+        [int] $Completed,
+        [int] $Total
+    )
+
+    if ($null -eq $Notification) { return }
+    try {
+        Add-Type -AssemblyName System.Runtime.WindowsRuntime
+        [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
+        $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
+        $xml.LoadXml((New-ArchiveProgressNotificationXml -DeviceName $DeviceName -Completed $Completed -Total $Total))
+        $toast = New-Object Windows.UI.Notifications.ToastNotification $xml
+        $toast.Tag = 'usbdown-archive-progress'
+        $toast.Group = 'usbdown'
+        $Notification.Toast = $toast
+        $Notification.Notifier.Show($toast)
+    }
+    catch {
+        Write-Host "Unable to update archive progress notification: $($_.Exception.Message)"
     }
 }
 
@@ -88,7 +182,10 @@ function Show-ArchiveNotification {
             $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
             $xml.LoadXml((New-ArchiveNotificationXml $DriveRoot))
             $toast = New-Object Windows.UI.Notifications.ToastNotification $xml
-            $notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('Microsoft.WindowsPowerShell_8wekyb3d8bbwe!WindowsPowerShell')
+            $notifier = New-ToastNotifier
+            if ($null -eq $notifier) {
+                throw 'No compatible Windows toast notifier could be created.'
+            }
             return [pscustomobject]@{
                 Notifier = $notifier
                 Toast = $toast
@@ -103,7 +200,8 @@ function Show-ArchiveNotification {
     }
     catch {
         Write-Log "Unable to display archive notification: $($_.Exception.Message)" 'WARN'
-        return $false
+        $message = "Media from $DriveRoot was archived successfully."
+        return (Show-DesktopNotification -Title 'USB media archive complete' -Message $message -TimeoutMs 5000)
     }
 }
 
@@ -137,25 +235,25 @@ function Join-MtpRelativePath {
     return Join-Path $BasePath $ChildPath
 }
 
-function Get-MtpRootDcimFolders {
+function Get-MtpRootMediaFolders {
     param([object] $DeviceRoot)
 
-    $dcimFolders = New-Object System.Collections.Generic.List[object]
+    $mediaFolders = New-Object System.Collections.Generic.List[object]
     foreach ($rootItem in @($DeviceRoot.Items())) {
         if (-not $rootItem.IsFolder) { continue }
 
         $rootName = [string]$rootItem.Name
         $rootFolder = $rootItem.GetFolder()
         foreach ($item in @($rootFolder.Items())) {
-            if ($item.IsFolder -and [string]$item.Name -ieq 'DCIM') {
-                $dcimFolders.Add([pscustomobject]@{
+            if ($item.IsFolder -and [string]$item.Name -in @('DCIM', 'Movies')) {
+                $mediaFolders.Add([pscustomobject]@{
                     Folder = $item.GetFolder()
-                    RelativePath = Join-MtpRelativePath $rootName 'DCIM'
+                    RelativePath = Join-MtpRelativePath $rootName ([string]$item.Name)
                 }) | Out-Null
             }
         }
     }
-    return $dcimFolders.ToArray()
+    return $mediaFolders.ToArray()
 }
 
 function Get-MtpItemExtension {
@@ -266,11 +364,11 @@ function Get-MtpMediaFiles {
         }
 
         $files = New-Object System.Collections.Generic.List[object]
-        $dcimFolders = @(Get-MtpRootDcimFolders $device)
-        Write-Host "MTP DCIM folders found: $($dcimFolders.Count)"
-        foreach ($dcim in $dcimFolders) {
-            Write-Host "MTP DCIM folder found: $($dcim.RelativePath)"
-            foreach ($file in @(Add-MtpFiles -Folder $dcim.Folder -RelativePath $dcim.RelativePath -Extensions $MediaExtensions)) {
+        $mediaFolders = @(Get-MtpRootMediaFolders $device)
+        Write-Host "MTP media folders found: $($mediaFolders.Count)"
+        foreach ($mediaFolder in $mediaFolders) {
+            Write-Host "MTP media folder found: $($mediaFolder.RelativePath)"
+            foreach ($file in @(Add-MtpFiles -Folder $mediaFolder.Folder -RelativePath $mediaFolder.RelativePath -Extensions $MediaExtensions)) {
                 $files.Add($file) | Out-Null
             }
         }
@@ -365,7 +463,7 @@ function Copy-ShellItem {
             throw "Unable to access staging directory: $destinationFolderPath"
         }
         try {
-            $folder.CopyHere($Item, 20)
+            $folder.CopyHere($Item, 4)
         }
         catch {
             Write-Host "Copy-ShellItem CopyHere failed: $($_.Exception.Message)"
@@ -612,7 +710,8 @@ function Invoke-MtpArchive {
         return
     }
 
-    $progressNotification = Show-ArchiveProgressNotification -DeviceName $MtpName
+    $progressNotification = Show-ArchiveProgressNotification -DeviceName $MtpName -Total $records.Count
+    $copiedCount = 0
     try {
         New-Item -ItemType Directory -Path $stagingRoot -Force | Out-Null
         foreach ($record in $records) {
@@ -620,6 +719,8 @@ function Invoke-MtpArchive {
             $copied = Copy-ShellItem -Item $record.Item -Destination $destination
             $record.DestinationHash = (Get-FileHash -LiteralPath $copied -Algorithm SHA256).Hash
             $record.Status = 'StagedAndVerified'
+            $copiedCount++
+            Update-ArchiveProgressNotification -Notification $progressNotification -DeviceName $MtpName -Completed $copiedCount -Total $records.Count
         }
 
         foreach ($record in $records) {
@@ -705,7 +806,8 @@ function Invoke-Archive {
         return
     }
 
-    $progressNotification = Show-ArchiveProgressNotification -DeviceName $source
+    $progressNotification = Show-ArchiveProgressNotification -DeviceName $source -Total $records.Count
+    $copiedCount = 0
     try {
         New-Item -ItemType Directory -Path $stagingRoot -Force | Out-Null
         foreach ($record in $records) {
@@ -717,6 +819,8 @@ function Invoke-Archive {
                 throw "Hash mismatch after copying $($record.SourcePath)"
             }
             $record.Status = 'StagedAndVerified'
+            $copiedCount++
+            Update-ArchiveProgressNotification -Notification $progressNotification -DeviceName $source -Completed $copiedCount -Total $records.Count
         }
 
         $finalRoot = $runRoot
